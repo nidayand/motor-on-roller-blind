@@ -9,11 +9,14 @@
 #include <ArduinoJson.h>
 #include "FS.h"
 
-#define mqtt_server "192.168.2.195" //MQTT server IP
-#define mqtt_port 1883              //MQTT server port
+//#define mqtt_server "192.168.2.195" //MQTT server IP
+//#define mqtt_port 1883              //MQTT server port
 
 //WIFI and MQTT
 WiFiClient espClient;
+char mqtt_server[40];
+char mqtt_port[6] = "1883";
+bool shouldSaveConfig = false;
 PubSubClient client(espClient);
 int ledPin = 2;                     //PIN used for the onboard led
 
@@ -29,8 +32,13 @@ long maxPosition = 2000000;         //Max position of the blind
 boolean loadDataSuccess = false;
 boolean saveItNow = false;          //If true will store positions to SPIFFS
 
+
 Stepper_28BYJ_48 small_stepper(D1, D3, D2, D4);
 
+/**
+ * Loading configuration that has been saved on SPIFFS.
+ * Returns false if not successful
+ */
 bool loadConfig() {
   File configFile = SPIFFS.open("/config.json", "r");
   if (!configFile) {
@@ -62,16 +70,12 @@ bool loadConfig() {
   json.printTo(Serial);
   Serial.println();
 
+  //Store variables locally
   currentPosition = long(json["currentPosition"]);
   maxPosition = long(json["maxPosition"]);
+  strcpy(mqtt_server, json["mqtt_server"]);
+  strcpy(mqtt_port, json["mqtt_port"]);
 
-  // Real world application would store these values in some variables for
-  // later use.
-
-  Serial.print("Loaded currentPosition: ");
-  Serial.println(currentPosition);
-  Serial.print("Loaded maxPosition: ");
-  Serial.println(maxPosition);
   return true;
 }
 
@@ -80,6 +84,8 @@ bool saveConfig() {
   JsonObject& json = jsonBuffer.createObject();
   json["currentPosition"] = currentPosition;
   json["maxPosition"] = maxPosition;
+  json["mqtt_server"] = mqtt_server;
+  json["mqtt_port"] = mqtt_port;
 
   File configFile = SPIFFS.open("/config.json", "w");
   if (!configFile) {
@@ -88,10 +94,10 @@ bool saveConfig() {
   }
 
   json.printTo(configFile);
-  json.printTo(Serial);
-  Serial.println();
 
   Serial.println("Saved JSON to SPIFFS");
+  json.printTo(Serial);
+  Serial.println();
   return true;
 }
 
@@ -150,7 +156,7 @@ void sendmsg(String topic, String payload){
     }
 }
 
-void callback(char* topic, byte* payload, unsigned int length) {
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
   /*
    * Possible input
    * - start. Will set existing position as 0
@@ -174,38 +180,74 @@ void callback(char* topic, byte* payload, unsigned int length) {
   }
 
   /*
-   * Below are new actions
+   * Below are actions based on inbound MQTT payload
    */
   if (res == "start"){
+    /*
+     * Store the current position as the start position
+     */
     currentPosition = 0;
     path = 0;
     saveItNow = true;
     action = "manual";
   } else if (res == "max"){
+    /*
+     * Store the max position of a closed blind
+     */
     maxPosition = currentPosition;
     path = 0;
     saveItNow = true;
     action = "manual";
   } else if (res == "0"){
+    /*
+     * Stop
+     */
     path = 0;
     saveItNow = true;
     action = "manual";
   } else if (res == "1"){
+    /*
+     * Move down without limit to max position
+     */
     path = 1;
     action = "manual";
   } else if (res == "-1"){
+    /*
+     * Move up without limit to top position
+     */
     path = -1;
     action = "manual";
   } else if (res == "close"){
+    /*
+     * Move down the blind and stop automatically when
+     * max position is reached
+     */
     path = 1;
     action = "auto";
   } else if (res == "open"){
+    /*
+     * Move up the blind and stop automatically when
+     * top position is reached
+     */
     path = -1;
     action = "auto";
+  } else {
+    /*
+     * Any other message will stop the blind
+     */
+    path = 0;
   }
 
   Serial.println(res);
   Serial.println();
+}
+
+/*
+ * Callback from WIFI Manager for saving configuration
+ */
+void saveConfigCallback () {
+  Serial.println("Should save config");
+  shouldSaveConfig = true;
 }
 
 void setup()
@@ -221,19 +263,57 @@ void setup()
   Serial.print("MQTT Client ID: ");
   Serial.println(mqttclientid);
 
+  //Define customer parameters for WIFI Manager
+  WiFiManagerParameter custom_mqtt_server("server", "mqtt server", mqtt_server, 40);
+  WiFiManagerParameter custom_mqtt_port("port", "mqtt port", mqtt_port, 6);
+
   //Setup WIFI Manager
   WiFiManager wifiManager;
-  wifiManager.autoConnect("AutoConnectAP", "mypassword");
 
-  //Setup connections
-  client.setServer(mqtt_server, mqtt_port);
-  client.setCallback(callback);
+  //reset settings - for testing
+  //clean FS, for testing
+  //SPIFFS.format();
+  //wifiManager.resetSettings();
+
+  //Make sure params gets saved
+  wifiManager.setSaveConfigCallback(saveConfigCallback);
+
+  //add all your parameters here
+  wifiManager.addParameter(&custom_mqtt_server);
+  wifiManager.addParameter(&custom_mqtt_port);
+
+  wifiManager.autoConnect("BlindsConfigAP", "nidayand");
 
   //Load config upon start
   if (!SPIFFS.begin()) {
     Serial.println("Failed to mount file system");
     return;
   }
+
+
+  /* Save the config back from WIFI Manager.
+   *  This is only called after configuration
+   */
+  if (shouldSaveConfig) {
+    //read updated parameters
+    strcpy(mqtt_server, custom_mqtt_server.getValue());
+    strcpy(mqtt_port, custom_mqtt_port.getValue());
+
+    //Save the data
+    saveConfig();
+  }
+
+  /* Setup connection for MQTT and for subscribed
+   *  messages
+   */
+  client.setServer(mqtt_server, int(mqtt_port));
+  client.setCallback(mqttCallback);
+
+  /*
+   * Try to load FS data configuration every time when
+   * booting up. If loading does not work, set the default
+   * positions
+   */
   loadDataSuccess = loadConfig();
   if (!loadDataSuccess){
     currentPosition = 0;
@@ -244,7 +324,7 @@ void setup()
   {
 
     // Authentication to avoid unauthorized updates
-    //ArduinoOTA.setPassword((const char *)"mypassword");
+    //ArduinoOTA.setPassword((const char *)"nidayand");
 
     ArduinoOTA.onStart([]() {
       Serial.println("Start");
@@ -282,6 +362,9 @@ void loop(){
     }
 
     if (action == "auto"){
+      /*
+       * Automatically open or close blind
+       */
       switch (path) {
         case -1:
             if (currentPosition > 0){
@@ -304,6 +387,9 @@ void loop(){
           }
       }
     } else if (action == "manual" && path != 0) {
+      /*
+       * Manually running the blind
+       */
       small_stepper.step(path);
       currentPosition = currentPosition + path;
     }
