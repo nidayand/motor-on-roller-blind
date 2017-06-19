@@ -6,13 +6,8 @@
 #include <ArduinoOTA.h>
 #include <WiFiManager.h>
 
-#include <Stepper.h>
-
 #include <ArduinoJson.h>
 #include "FS.h"
-
-#define STEPS_PER_MOTOR_REVOLUTION 32
-#define STEPS_PER_OUTPUT_REVOLUTION 8 * 64  //2048
 
 #define mqtt_server "192.168.2.195" //MQTT server IP
 #define mqtt_port 1883              //MQTT server port
@@ -20,19 +15,19 @@
 //WIFI and MQTT
 WiFiClient espClient;
 PubSubClient client(espClient);
-int ledPin = 2;                   //PIN used for the onboard led
+int ledPin = 2;                     //PIN used for the onboard led
 
-String action;
-int path = 0;     //Direction of blind (1 = down, 0 = stop, -1 = up)
+String action;                      //Action manual/auto
+int path = 0;                       //Direction of blind (1 = down, 0 = stop, -1 = up)
 
 //MQTT topics
 const char* mqttclientid;         //Generated MQTT client id
 
 //Stored data
-long currentPosition = 0;
-long maxPosition = 30000;
+long currentPosition = 0;           //Current position of the blind
+long maxPosition = 2000000;         //Max position of the blind
 boolean loadDataSuccess = false;
-boolean saveItNow = false;
+boolean saveItNow = false;          //If true will store positions to SPIFFS
 
 Stepper_28BYJ_48 small_stepper(D1, D3, D2, D4);
 
@@ -158,7 +153,8 @@ void sendmsg(String topic, String payload){
 void callback(char* topic, byte* payload, unsigned int length) {
   /*
    * Possible input
-   * - set. Will set existing position as 0 and direction = 1. Will start calibrating
+   * - start. Will set existing position as 0
+   * - max Will set the max position
    * - -1 / 0 / 1 . Will steer the blinds up/stop/down
    */
   Serial.print("Message arrived [");
@@ -180,13 +176,19 @@ void callback(char* topic, byte* payload, unsigned int length) {
   /*
    * Below are new actions
    */
-  if (res == "set"){
-    path = 1;
+  if (res == "start"){
     currentPosition = 0;
-    action = res;
+    path = 0;
+    saveItNow = true;
+    action = "manual";
+  } else if (res == "max"){
+    maxPosition = currentPosition;
+    path = 0;
+    saveItNow = true;
+    action = "manual";
   } else if (res == "0"){
     path = 0;
-    saveItNow = true;   //Only save when we are stopping
+    saveItNow = true;
     action = "manual";
   } else if (res == "1"){
     path = 1;
@@ -194,10 +196,10 @@ void callback(char* topic, byte* payload, unsigned int length) {
   } else if (res == "-1"){
     path = -1;
     action = "manual";
-  } else if (res == "down"){
+  } else if (res == "close"){
     path = 1;
     action = "auto";
-  } else if (res == "up"){
+  } else if (res == "open"){
     path = -1;
     action = "auto";
   }
@@ -221,7 +223,7 @@ void setup()
 
   //Setup WIFI Manager
   WiFiManager wifiManager;
-  wifiManager.autoConnect("AutoConnectAP", "pgtl1ks");
+  wifiManager.autoConnect("AutoConnectAP", "mypassword");
 
   //Setup connections
   client.setServer(mqtt_server, mqtt_port);
@@ -235,19 +237,14 @@ void setup()
   loadDataSuccess = loadConfig();
   if (!loadDataSuccess){
     currentPosition = 0;
-    maxPosition = 30000;
+    maxPosition = 2000000;
   }
 
   //Setup OTA
   {
-    // Port defaults to 8266
-    // ArduinoOTA.setPort(8266);
-
-    // Hostname defaults to esp8266-[ChipID]
-    // ArduinoOTA.setHostname("myesp8266");
 
     // Authentication to avoid unauthorized updates
-    //ArduinoOTA.setPassword((const char *)"pgtl1ks");
+    //ArduinoOTA.setPassword((const char *)"mypassword");
 
     ArduinoOTA.onStart([]() {
       Serial.println("Start");
@@ -306,7 +303,7 @@ void loop(){
             saveItNow = true;
           }
       }
-    } else if ((action == "manual" || action == "set") && path != 0) {
+    } else if (action == "manual" && path != 0) {
       small_stepper.step(path);
       currentPosition = currentPosition + path;
     }
