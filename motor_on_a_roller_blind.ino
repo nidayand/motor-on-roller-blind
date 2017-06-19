@@ -111,7 +111,7 @@ void reconnect() {
       Serial.println("connected");
 
       //Send register MQTT message with JSON of chipid and ip-address
-      sendmsg("/raw/esp8266/register","{ \"id\": \""+String(ESP.getChipId())+"\", \"ip\":"+WiFi.localIP().toString()+"\"}");
+      sendmsg("/raw/esp8266/register","{ \"id\": \""+String(ESP.getChipId())+"\", \"ip\":\""+WiFi.localIP().toString()+"\", \"type\":\"roller blind\"}");
 
       //Setup subscription
       client.subscribe(("/raw/esp8266/"+String(ESP.getChipId())+"/in").c_str());
@@ -303,7 +303,7 @@ void setup()
   /* Setup connection for MQTT and for subscribed
    *  messages
    */
-  client.setServer(mqtt_server, int(mqtt_port));
+  client.setServer(mqtt_server, String(mqtt_port).toInt());
   client.setCallback(mqttCallback);
 
   /*
@@ -322,6 +322,8 @@ void setup()
 
     // Authentication to avoid unauthorized updates
     //ArduinoOTA.setPassword((const char *)"nidayand");
+
+    ArduinoOTA.setHostname(("blinds-"+String(ESP.getChipId())).c_str());
 
     ArduinoOTA.onStart([]() {
       Serial.println("Start");
