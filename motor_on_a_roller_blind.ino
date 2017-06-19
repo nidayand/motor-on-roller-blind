@@ -16,6 +16,7 @@ char mqtt_port[6] = "1883";
 bool shouldSaveConfig = false;
 PubSubClient client(espClient);
 int ledPin = 2;                     //PIN used for the onboard led
+boolean initLoop = true;
 
 String action;                      //Action manual/auto
 int path = 0;                       //Direction of blind (1 = down, 0 = stop, -1 = up)
@@ -31,6 +32,7 @@ boolean saveItNow = false;          //If true will store positions to SPIFFS
 
 
 Stepper_28BYJ_48 small_stepper(D1, D3, D2, D4);
+
 
 /**
  * Loading configuration that has been saved on SPIFFS.
@@ -76,6 +78,10 @@ bool loadConfig() {
   return true;
 }
 
+/**
+ * Save configuration data to a JSON file
+ * on SPIFFS
+ */
 bool saveConfig() {
   StaticJsonBuffer<200> jsonBuffer;
   JsonObject& json = jsonBuffer.createObject();
@@ -153,6 +159,9 @@ void sendmsg(String topic, String payload){
     }
 }
 
+/**
+ * Receiving messages that are subscribed to
+ */
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   /*
    * Possible input
@@ -290,6 +299,7 @@ void setup()
 
   /* Save the config back from WIFI Manager.
    *  This is only called after configuration
+   *  when in AP mode
    */
   if (shouldSaveConfig) {
     //read updated parameters
@@ -316,6 +326,7 @@ void setup()
     currentPosition = 0;
     maxPosition = 2000000;
   }
+
 
   //Setup OTA
   {
@@ -344,6 +355,7 @@ void setup()
     });
     ArduinoOTA.begin();
   }
+
 }
 
 void loop(){
@@ -358,6 +370,15 @@ void loop(){
     if (saveItNow){
       saveConfig();
       saveItNow = false;
+      /*
+       * If no action is required by the motor make sure to
+       * turn off all coils to avoid overheating and less energy
+       * consumption
+       */
+        digitalWrite(D1,LOW);
+        digitalWrite(D2,LOW);
+        digitalWrite(D3,LOW);
+        digitalWrite(D4,LOW);
     }
 
     if (action == "auto"){
@@ -393,4 +414,20 @@ void loop(){
       currentPosition = currentPosition + path;
     }
   }
+
+  /*
+   * After running setup() the motor might still have
+   * power on some of the coils. This is making sure that
+   * power is off the first time loop() has been executed
+   * to avoid heating the stepper motor draining
+   * unnecessary current
+   */
+  if (initLoop){
+    initLoop = false;
+    digitalWrite(D1,LOW);
+    digitalWrite(D2,LOW);
+    digitalWrite(D3,LOW);
+    digitalWrite(D4,LOW);
+  }
+
 }
