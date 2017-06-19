@@ -9,9 +9,6 @@
 #include <ArduinoJson.h>
 #include "FS.h"
 
-//#define mqtt_server "192.168.2.195" //MQTT server IP
-//#define mqtt_port 1883              //MQTT server port
-
 //WIFI and MQTT
 WiFiClient espClient;
 char mqtt_server[40];
