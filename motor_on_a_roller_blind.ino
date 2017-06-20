@@ -15,8 +15,9 @@ char mqtt_server[40];
 char mqtt_port[6] = "1883";
 bool shouldSaveConfig = false;
 PubSubClient client(espClient);
-int ledPin = 2;                     //PIN used for the onboard led
 boolean initLoop = true;
+boolean debugging = false;          //Debug mode. Toggled by payload "debug". Will send MQTT message at stop with position
+String debugTopic;
 
 String action;                      //Action manual/auto
 int path = 0;                       //Direction of blind (1 = down, 0 = stop, -1 = up)
@@ -132,16 +133,13 @@ void reconnect() {
     }
   }
 }
-
-/*
- * Blink the onboard led
- */
-void qblink(){
-    digitalWrite(ledPin, LOW); //turn on led
-    delay(50);
-    digitalWrite(ledPin, HIGH);
-    delay(50);
+void stopPowerToCoils(){
+  digitalWrite(D1,LOW);
+  digitalWrite(D2,LOW);
+  digitalWrite(D3,LOW);
+  digitalWrite(D4,LOW);
 }
+
 
 /*
  * Common function to turn on WIFI radio, connect and get an IP address,
@@ -149,13 +147,11 @@ void qblink(){
  * Finally, close down the connection and radio
  */
 void sendmsg(String topic, String payload){
-    //Blink
-    qblink();
 
     //Send status to MQTT bus if connected
     if (client.connected()){
       client.publish(topic.c_str(), payload.c_str());
-      Serial.println("Published MQTT message");
+      //Serial.println("Published MQTT message");
     }
 }
 
@@ -237,6 +233,12 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
      */
     path = -1;
     action = "auto";
+  } else if (res == "debug"){
+    /*
+     * Toggle debug mode
+     */
+    debugging = !debugging;
+    sendmsg(debugTopic, "{ \"debug\":\""+String(debugging)+"\", \"currentPosition\":"+String(currentPosition)+" , \"maxPosition\":"+String(maxPosition)+" }");
   } else {
     /*
      * Any other message will stop the blind
@@ -263,6 +265,8 @@ void setup()
   Serial.print("Starting now\n");
 
   action = "";
+
+  debugTopic = "/raw/esp8266/"+String(ESP.getChipId())+"/out";
 
   //Setup MQTT Client ID
   mqttclientid = ("ESPClient-"+String(ESP.getChipId())).c_str();
@@ -370,15 +374,20 @@ void loop(){
     if (saveItNow){
       saveConfig();
       saveItNow = false;
+
       /*
-       * If no action is required by the motor make sure to
-       * turn off all coils to avoid overheating and less energy
-       * consumption
+       * Send debug data if enabled
        */
-        digitalWrite(D1,LOW);
-        digitalWrite(D2,LOW);
-        digitalWrite(D3,LOW);
-        digitalWrite(D4,LOW);
+      if (debugging){
+        sendmsg(debugTopic, "{ \"debug\":\""+String(debugging)+"\", \"currentPosition\":"+String(currentPosition)+" , \"maxPosition\":"+String(maxPosition)+" }");
+      }
+
+      /*
+      * If no action is required by the motor make sure to
+      * turn off all coils to avoid overheating and less energy
+      * consumption
+      */
+      stopPowerToCoils();
     }
 
     if (action == "auto"){
@@ -424,10 +433,7 @@ void loop(){
    */
   if (initLoop){
     initLoop = false;
-    digitalWrite(D1,LOW);
-    digitalWrite(D2,LOW);
-    digitalWrite(D3,LOW);
-    digitalWrite(D4,LOW);
+    stopPowerToCoils();
   }
 
 }
