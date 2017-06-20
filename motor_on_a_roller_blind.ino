@@ -200,20 +200,20 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     path = 0;
     saveItNow = true;
     action = "manual";
-  } else if (res == "0"){
+  } else if (res == "0" || res == "stop"){
     /*
      * Stop
      */
     path = 0;
     saveItNow = true;
     action = "manual";
-  } else if (res == "1"){
+  } else if (res == "1" || res == "down"){
     /*
      * Move down without limit to max position
      */
     path = 1;
     action = "manual";
-  } else if (res == "-1"){
+  } else if (res == "-1" || res == "up"){
     /*
      * Move up without limit to top position
      */
@@ -330,7 +330,6 @@ void setup()
     currentPosition = 0;
     maxPosition = 2000000;
   }
-
 
   //Setup OTA
   {
