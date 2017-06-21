@@ -9,12 +9,19 @@
 #include <ArduinoJson.h>
 #include "FS.h"
 
-//WIFI and MQTT
+//Configure Default Settings
+String APid = "BlindsConnectAP";
+String APpw = "nidayand";
+String OTAhostname = "blinds";
+
+//Fixed settings for WIFI and MQTT
 WiFiClient espClient;
-char mqtt_server[40];
+PubSubClient client(espClient);   //MQTT client
+bool shouldSaveConfig = false;    //Used for WIFI Manager callback to save parameters
+char mqtt_server[40];             //MQTT server config
 char mqtt_port[6] = "1883";
-bool shouldSaveConfig = false;
-PubSubClient client(espClient);
+const char* mqttclientid;         //Generated MQTT client id
+
 boolean initLoop = true;
 boolean debugging = false;          //Debug mode. Toggled by payload "debug". Will send MQTT message at stop with position
 String debugTopic;
@@ -22,8 +29,6 @@ String debugTopic;
 String action;                      //Action manual/auto
 int path = 0;                       //Direction of blind (1 = down, 0 = stop, -1 = up)
 
-//MQTT topics
-const char* mqttclientid;         //Generated MQTT client id
 
 //Stored data
 long currentPosition = 0;           //Current position of the blind
@@ -36,9 +41,9 @@ Stepper_28BYJ_48 small_stepper(D1, D3, D2, D4);
 
 
 /**
- * Loading configuration that has been saved on SPIFFS.
- * Returns false if not successful
- */
+   Loading configuration that has been saved on SPIFFS.
+   Returns false if not successful
+*/
 bool loadConfig() {
   File configFile = SPIFFS.open("/config.json", "r");
   if (!configFile) {
@@ -80,9 +85,9 @@ bool loadConfig() {
 }
 
 /**
- * Save configuration data to a JSON file
- * on SPIFFS
- */
+   Save configuration data to a JSON file
+   on SPIFFS
+*/
 bool saveConfig() {
   StaticJsonBuffer<200> jsonBuffer;
   JsonObject& json = jsonBuffer.createObject();
@@ -106,9 +111,9 @@ bool saveConfig() {
 }
 
 /*
- * Setup WIFI connection and connect the MQTT client to the
- * MQTT server
- */
+   Setup WIFI connection and connect the MQTT client to the
+   MQTT server
+*/
 void reconnect() {
   // Loop until we're reconnected
   while (!client.connected()) {
@@ -118,10 +123,10 @@ void reconnect() {
       Serial.println("connected");
 
       //Send register MQTT message with JSON of chipid and ip-address
-      sendmsg("/raw/esp8266/register","{ \"id\": \""+String(ESP.getChipId())+"\", \"ip\":\""+WiFi.localIP().toString()+"\", \"type\":\"roller blind\"}");
+      sendmsg("/raw/esp8266/register", "{ \"id\": \"" + String(ESP.getChipId()) + "\", \"ip\":\"" + WiFi.localIP().toString() + "\", \"type\":\"roller blind\"}");
 
       //Setup subscription
-      client.subscribe(("/raw/esp8266/"+String(ESP.getChipId())+"/in").c_str());
+      client.subscribe(("/raw/esp8266/" + String(ESP.getChipId()) + "/in").c_str());
 
     } else {
       Serial.print("failed, rc=");
@@ -133,116 +138,122 @@ void reconnect() {
     }
   }
 }
-void stopPowerToCoils(){
-  digitalWrite(D1,LOW);
-  digitalWrite(D2,LOW);
-  digitalWrite(D3,LOW);
-  digitalWrite(D4,LOW);
+void stopPowerToCoils() {
+  digitalWrite(D1, LOW);
+  digitalWrite(D2, LOW);
+  digitalWrite(D3, LOW);
+  digitalWrite(D4, LOW);
 }
 
 
 /*
- * Common function to turn on WIFI radio, connect and get an IP address,
- * connect to MQTT server and publish a message on the bus.
- * Finally, close down the connection and radio
- */
-void sendmsg(String topic, String payload){
+   Common function to turn on WIFI radio, connect and get an IP address,
+   connect to MQTT server and publish a message on the bus.
+   Finally, close down the connection and radio
+*/
+void sendmsg(String topic, String payload) {
 
-    //Send status to MQTT bus if connected
-    if (client.connected()){
-      client.publish(topic.c_str(), payload.c_str());
-      //Serial.println("Published MQTT message");
-    }
+  //Send status to MQTT bus if connected
+  if (client.connected()) {
+    client.publish(topic.c_str(), payload.c_str());
+  }
+}
+/*
+   Common function to get a topic based on the chipid. Useful if flashing
+   more than one device
+*/
+String getMqttTopic(String type) {
+  return "/raw/esp8266/" + String(ESP.getChipId()) + "/" + type;
 }
 
 /**
- * Receiving messages that are subscribed to
- */
+   Receiving messages that are subscribed to
+*/
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   /*
-   * Possible input
-   * - start. Will set existing position as 0
-   * - max Will set the max position
-   * - -1 / 0 / 1 . Will steer the blinds up/stop/down
-   */
+     Possible input
+     - start. Will set existing position as 0
+     - max Will set the max position
+     - -1 / 0 / 1 . Will steer the blinds up/stop/down
+  */
   Serial.print("Message arrived [");
   Serial.print(topic);
   Serial.print("] ");
-  String res ="";
-  for (int i=0;i<length;i++) {
-    res+= String((char)payload[i]);
+  String res = "";
+  for (int i = 0; i < length; i++) {
+    res += String((char)payload[i]);
   }
 
   /*
-   * Check if calibration is running and if stop is received. Store the location
-   */
-  if (action == "set" && res == "0"){
+     Check if calibration is running and if stop is received. Store the location
+  */
+  if (action == "set" && res == "0") {
     maxPosition = currentPosition;
     saveItNow = true;
   }
 
   /*
-   * Below are actions based on inbound MQTT payload
-   */
-  if (res == "start"){
+     Below are actions based on inbound MQTT payload
+  */
+  if (res == "start") {
     /*
-     * Store the current position as the start position
-     */
+       Store the current position as the start position
+    */
     currentPosition = 0;
     path = 0;
     saveItNow = true;
     action = "manual";
-  } else if (res == "max"){
+  } else if (res == "max") {
     /*
-     * Store the max position of a closed blind
-     */
+       Store the max position of a closed blind
+    */
     maxPosition = currentPosition;
     path = 0;
     saveItNow = true;
     action = "manual";
-  } else if (res == "0" || res == "stop"){
+  } else if (res == "0" || res == "stop") {
     /*
-     * Stop
-     */
+       Stop
+    */
     path = 0;
     saveItNow = true;
     action = "manual";
-  } else if (res == "1" || res == "down"){
+  } else if (res == "1" || res == "down") {
     /*
-     * Move down without limit to max position
-     */
+       Move down without limit to max position
+    */
     path = 1;
     action = "manual";
-  } else if (res == "-1" || res == "up"){
+  } else if (res == "-1" || res == "up") {
     /*
-     * Move up without limit to top position
-     */
+       Move up without limit to top position
+    */
     path = -1;
     action = "manual";
-  } else if (res == "close"){
+  } else if (res == "close") {
     /*
-     * Move down the blind and stop automatically when
-     * max position is reached
-     */
+       Move down the blind and stop automatically when
+       max position is reached
+    */
     path = 1;
     action = "auto";
-  } else if (res == "open"){
+  } else if (res == "open") {
     /*
-     * Move up the blind and stop automatically when
-     * top position is reached
-     */
+       Move up the blind and stop automatically when
+       top position is reached
+    */
     path = -1;
     action = "auto";
-  } else if (res == "debug"){
+  } else if (res == "debug") {
     /*
-     * Toggle debug mode
-     */
+       Toggle debug mode
+    */
     debugging = !debugging;
-    sendmsg(debugTopic, "{ \"debug\":\""+String(debugging)+"\", \"currentPosition\":"+String(currentPosition)+" , \"maxPosition\":"+String(maxPosition)+" }");
+    sendmsg(debugTopic, "{ \"debug\":\"" + String(debugging) + "\", \"currentPosition\":" + String(currentPosition) + " , \"maxPosition\":" + String(maxPosition) + " }");
   } else {
     /*
-     * Any other message will stop the blind
-     */
+       Any other message will stop the blind
+    */
     path = 0;
   }
 
@@ -251,8 +262,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 }
 
 /*
- * Callback from WIFI Manager for saving configuration
- */
+   Callback from WIFI Manager for saving configuration
+*/
 void saveConfigCallback () {
   Serial.println("Should save config");
   shouldSaveConfig = true;
@@ -266,10 +277,10 @@ void setup()
 
   action = "";
 
-  debugTopic = "/raw/esp8266/"+String(ESP.getChipId())+"/out";
+  debugTopic = getMqttTopic("out");
 
   //Setup MQTT Client ID
-  mqttclientid = ("ESPClient-"+String(ESP.getChipId())).c_str();
+  mqttclientid = ("ESPClient-" + String(ESP.getChipId())).c_str();
   Serial.print("MQTT Client ID: ");
   Serial.println(mqttclientid);
 
@@ -292,7 +303,7 @@ void setup()
   wifiManager.addParameter(&custom_mqtt_server);
   wifiManager.addParameter(&custom_mqtt_port);
 
-  wifiManager.autoConnect("BlindsConfigAP", "nidayand");
+  wifiManager.autoConnect(APid.c_str(), APpw.c_str());
 
   //Load config upon start
   if (!SPIFFS.begin()) {
@@ -302,9 +313,9 @@ void setup()
 
 
   /* Save the config back from WIFI Manager.
-   *  This is only called after configuration
-   *  when in AP mode
-   */
+      This is only called after configuration
+      when in AP mode
+  */
   if (shouldSaveConfig) {
     //read updated parameters
     strcpy(mqtt_server, custom_mqtt_server.getValue());
@@ -315,18 +326,18 @@ void setup()
   }
 
   /* Setup connection for MQTT and for subscribed
-   *  messages
-   */
+      messages
+  */
   client.setServer(mqtt_server, String(mqtt_port).toInt());
   client.setCallback(mqttCallback);
 
   /*
-   * Try to load FS data configuration every time when
-   * booting up. If loading does not work, set the default
-   * positions
-   */
+     Try to load FS data configuration every time when
+     booting up. If loading does not work, set the default
+     positions
+  */
   loadDataSuccess = loadConfig();
-  if (!loadDataSuccess){
+  if (!loadDataSuccess) {
     currentPosition = 0;
     maxPosition = 2000000;
   }
@@ -337,7 +348,7 @@ void setup()
     // Authentication to avoid unauthorized updates
     //ArduinoOTA.setPassword((const char *)"nidayand");
 
-    ArduinoOTA.setHostname(("blinds-"+String(ESP.getChipId())).c_str());
+    ArduinoOTA.setHostname((OTAhostname + "-" + String(ESP.getChipId())).c_str());
 
     ArduinoOTA.onStart([]() {
       Serial.println("Start");
@@ -361,7 +372,7 @@ void setup()
 
 }
 
-void loop(){
+void loop() {
   //OTA client code
   ArduinoOTA.handle();
 
@@ -370,44 +381,44 @@ void loop(){
   } else {
     client.loop();
 
-    if (saveItNow){
+    if (saveItNow) {
       saveConfig();
       saveItNow = false;
 
       /*
-       * Send debug data if enabled
-       */
-      if (debugging){
-        sendmsg(debugTopic, "{ \"debug\":\""+String(debugging)+"\", \"currentPosition\":"+String(currentPosition)+" , \"maxPosition\":"+String(maxPosition)+" }");
+         Send debug data if enabled
+      */
+      if (debugging) {
+        sendmsg(debugTopic, "{ \"debug\":\"" + String(debugging) + "\", \"currentPosition\":" + String(currentPosition) + " , \"maxPosition\":" + String(maxPosition) + " }");
       }
 
       /*
-      * If no action is required by the motor make sure to
-      * turn off all coils to avoid overheating and less energy
-      * consumption
+        If no action is required by the motor make sure to
+        turn off all coils to avoid overheating and less energy
+        consumption
       */
       stopPowerToCoils();
     }
 
-    if (action == "auto"){
+    if (action == "auto") {
       /*
-       * Automatically open or close blind
-       */
+         Automatically open or close blind
+      */
       switch (path) {
         case -1:
-            if (currentPosition > 0){
-              small_stepper.step(path);
-              currentPosition = currentPosition + path;
-            } else {
-              path = 0;
-              Serial.println("Stopped. Reached top position");
-              saveItNow = true;
-            }
-            break;
+          if (currentPosition > 0) {
+            small_stepper.step(path);
+            currentPosition = currentPosition + path;
+          } else {
+            path = 0;
+            Serial.println("Stopped. Reached top position");
+            saveItNow = true;
+          }
+          break;
         case 1:
-          if (currentPosition < maxPosition){
-              small_stepper.step(path);
-              currentPosition = currentPosition + path;
+          if (currentPosition < maxPosition) {
+            small_stepper.step(path);
+            currentPosition = currentPosition + path;
           } else {
             path = 0;
             Serial.println("Stopped. Reached max position");
@@ -416,21 +427,21 @@ void loop(){
       }
     } else if (action == "manual" && path != 0) {
       /*
-       * Manually running the blind
-       */
+         Manually running the blind
+      */
       small_stepper.step(path);
       currentPosition = currentPosition + path;
     }
   }
 
   /*
-   * After running setup() the motor might still have
-   * power on some of the coils. This is making sure that
-   * power is off the first time loop() has been executed
-   * to avoid heating the stepper motor draining
-   * unnecessary current
-   */
-  if (initLoop){
+     After running setup() the motor might still have
+     power on some of the coils. This is making sure that
+     power is off the first time loop() has been executed
+     to avoid heating the stepper motor draining
+     unnecessary current
+  */
+  if (initLoop) {
     initLoop = false;
     stopPowerToCoils();
   }
