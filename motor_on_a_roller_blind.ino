@@ -109,7 +109,18 @@ bool saveConfig() {
   Serial.println();
   return true;
 }
+/*
+   Common function to turn on WIFI radio, connect and get an IP address,
+   connect to MQTT server and publish a message on the bus.
+   Finally, close down the connection and radio
+*/
+void sendmsg(String topic, String payload) {
 
+  //Send status to MQTT bus if connected
+  if (client.connected()) {
+    client.publish(topic.c_str(), payload.c_str());
+  }
+}
 /*
    Setup WIFI connection and connect the MQTT client to the
    MQTT server
@@ -145,19 +156,6 @@ void stopPowerToCoils() {
   digitalWrite(D4, LOW);
 }
 
-
-/*
-   Common function to turn on WIFI radio, connect and get an IP address,
-   connect to MQTT server and publish a message on the bus.
-   Finally, close down the connection and radio
-*/
-void sendmsg(String topic, String payload) {
-
-  //Send status to MQTT bus if connected
-  if (client.connected()) {
-    client.publish(topic.c_str(), payload.c_str());
-  }
-}
 /*
    Common function to get a topic based on the chipid. Useful if flashing
    more than one device
